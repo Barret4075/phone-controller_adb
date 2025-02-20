@@ -1,12 +1,10 @@
-import sys
 import cv2
 import numpy as np
 from copy import deepcopy
-import time
 
 
 class cut_img:
-    def __init__(self,  img_file:np.ndarray,scale=0.34,):
+    def __init__(self,  img_file:np.ndarray,scale=0.34,draw=False):
         """imgfile:单通道灰度值图像\n
         scale:比例
         """
@@ -18,12 +16,14 @@ class cut_img:
         self.sub_img = None
         self.notdone=True
         # 坐标标记
+        self.draw_on_ori=draw
         self.start_x, self.start_y, self.end_x, self.end_y = 0, 0, 0, 0
         # 在缩略图上的坐标标记
         self.ori_x, self.ori_y = 0, 0
         # 放大镜
         self.magnifier_range = 60
         self.magnifier_scale = 4
+        
 
     def save_img(self, event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDOWN:
@@ -44,9 +44,15 @@ class cut_img:
             ]
             global target_img
             target_img=self.sub_img
-            cv2.imshow("image", self.resized_img)
-            cv2.imshow("click to save", self.sub_img)
             self.show_marked_img = False
+            if self.draw_on_ori:
+                marked=deepcopy(self.resized_img)
+                cv2.rectangle(marked, (self.ori_x, self.ori_y), (x, y), (0, 0, 160), 1)
+                cv2.imshow("image",marked)
+            else:
+                cv2.imshow("image", self.resized_img)
+
+            cv2.imshow("click to save", self.sub_img)
             cv2.setMouseCallback("click to save", self.save_img)
         if event == cv2.EVENT_MOUSEMOVE:
             if self.show_marked_img:
@@ -86,13 +92,27 @@ class cut_img:
         cv2.destroyAllWindows()
         return self.sub_img
 
+    def draw_coordinate_shape(self) -> tuple:
+        cv2.imshow("image", self.resized_img)
+        cv2.setMouseCallback("image", self.draw)
+        while self.notdone:
+            cv2.waitKey(1)
+        cv2.destroyAllWindows()
+        return (sorted((self.start_y,self.end_y)),sorted((self.start_x,self.end_x)))
+
+
 def cut(img):
     sub_img=cut_img(img)
     return sub_img.cut_img()
 
+def draw_coordinate(img):
+    s=cut_img(img,draw=True)
+    return s.draw_coordinate_shape()
+
 if __name__== "__main__":
     img=cv2.cvtColor(np.array(cv2.imread('screen.png')),cv2.COLOR_RGB2GRAY)
-    img=cut(img)
-    cv2.imshow('img',img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    sx,sy,ex,ed=draw_coordinate(img)
+    print(sx,sy,ex,ed)
+    # cv2.imshow('img',img)
+    # cv2.waitKey(0)
+    # cv2.destroyAllWindows()

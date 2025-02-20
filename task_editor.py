@@ -1,12 +1,10 @@
 import os
 import time
-from cut_img import cut
+from cut_img import cut,draw_coordinate
 import random
 from enum import Enum
 from copy import deepcopy
 import pickle
-
-# import os
 import cv2
 from adbutils import adb
 import numpy as np
@@ -46,73 +44,44 @@ def clickbutton(d, img,target=None):
 
 class actionType(Enum):
     click = 'click'
-    swipeup = 'swipe_up'
+    common_swipe = 'swipe'
     keyevent = 'keyevent'
     delay = 'delay'
     begin = 'start_of'
     click_possibly ='possible_button'
     click_offset ='offset_click'
     swipe_offset='offset_swipe'
+
 class swipedirection(Enum):
     up="up"
     down="down"
     right="right"
     left="left"
-def swipe(d,img,direction):
-    shape=np.array(capscreen(d)).shape
-    shapeX,shapeY,*_ =shape
-    _, maxVal, _, (startX, startY) = cv2.minMaxLoc(
-        cv2.matchTemplate(capscreen(d), img, cv2.TM_CCOEFF_NORMED))
-    startX=startX+random.randint(0,img.shape[1])
-    startY=startY+random.randint(0,img.shape[0])
+
+
+def swipe(d, direction, img=None,coordinates=False):
+    screen = capscreen(d)
+    shapeY, shapeX = screen.shape[:2]
+    if coordinates:
+        startY,startX=random.randint(*img[0]),random.randint(*img[1])
+    else:
+        _, maxVal, _, (startX,startY,) = cv2.minMaxLoc(
+            cv2.matchTemplate(screen, img, cv2.TM_CCOEFF_NORMED))
+        startX += random.randint(0, img.shape[1])
+        startY += random.randint(0, img.shape[0])
     match direction:
         case swipedirection.up:
-            end_X=max(startX-random.randint(400,600),0)
-            end_Y=startY+random.randint(-30,30)
-
-        case swipedirection.down:
-            end_X=min(startX+random.randint(400,600),shapeY)
-            end_Y=startY+random.randint(-30,30)
-        case swipedirection.left:
-            end_Y=max(startY-random.randint(400,600),0)
-            end_X=startX+random.randint(-30,30)
-        case swipedirection.right:
-            end_Y=min(startY+random.randint(400,600),shapeX)
-            end_X=startX+random.randint(-30,30)
-    d.swipe(startX,startY,end_X,end_Y,random.uniform(0.4,1.3))
-    print(f"swipe sccess from X:{startX} Y{startY} to X{end_X} Y{end_Y}")
-def swipe(d, img, direction):
-    screen = capscreen(d)
-    shapeY, shapeX = screen.shape[:2]  # shape[0]是高度(Y轴)，shape[1]是宽度(X轴)
-    
-    # 模板匹配获取起始点
-    _, maxVal, _, (startX,startY,) = cv2.minMaxLoc(
-        cv2.matchTemplate(screen, img, cv2.TM_CCOEFF_NORMED))
-    print(f"X:{startX} Y:{startY} img.shape{img.shape}")
-    
-    # 添加随机偏移防止固定点操作
-    startX += random.randint(0, img.shape[1])
-    startY += random.randint(0, img.shape[0])
-    
-    # 根据方向计算终点坐标
-    match direction:
-        case swipedirection.up:    # Y减少
             end_X = startX + random.randint(-30, 30)
             end_Y = max(startY - random.randint(400, 600), 0)
-            
-        case swipedirection.down:  # Y增加
+        case swipedirection.down:
             end_X = startX + random.randint(-30, 30)
             end_Y = min(startY + random.randint(400, 600), shapeY)
-            
-        case swipedirection.left:  # X减少
+        case swipedirection.left:
             end_X = max(startX - random.randint(400, 600), 0)
             end_Y = startY + random.randint(-30, 30)
-            
-        case swipedirection.right: # X增加
+        case swipedirection.right:
             end_X = min(startX + random.randint(400, 600), shapeX)
             end_Y = startY + random.randint(-30, 30)
-    
-    # 执行滑动操作
     d.swipe(startX, startY, end_X, end_Y, random.uniform(0.2, 0.7))
     print(f"swipe success from X:{startX} Y:{startY} to X:{end_X} Y:{end_Y}")
 
@@ -120,8 +89,8 @@ def action(d, para, act):
     match act:
         case actionType.click:
             clickbutton(d, para)
-        case actionType.swipeup:
-            d.swipe(500,500,500,100,1.6)
+        case actionType.common_swipe:
+            swipe(d,*para,coordinates=True)
         case actionType.keyevent:
             d.keyevent(para)
         case actionType.delay:
@@ -134,21 +103,13 @@ def action(d, para, act):
                 time.sleep(random.uniform(0.8, 1.2))
                 d.swipe(500, 500, 100, 500, 0.1)
         case actionType.click_possibly:
-            try:
-                time.sleep(3)
-                clickbutton(d,para)
-            except:
-                pass
+            time.sleep(3)
+            clickbutton(d,para)
         case actionType.click_offset:
             pat,*offset_shape=para
             clickbutton(d,pat,offset_shape)
         case actionType.swipe_offset:
             swipe(d,*para)
-
-
-    # for target,act in process:
-    #     time.sleep(random.randint(3,6))
-    #     action(d,target,act)
 
 
 def createTask():
@@ -159,7 +120,6 @@ def createTask():
             '\n'.join([f'{ind}.{i.value}' for ind,i in actionlist]+['请选择'])
         )
         if r.isalnum() and int(r)-1 in range(len(actionType)):
-            # listofaction=list(enumerate(actionType,start=1))
             r=actionlist[int(r)-1][1]
         else:
             with open(f'{r}.task', "wb") as f:
@@ -189,17 +149,23 @@ def createTask():
             #延迟
             case actionType.delay:
                 second = int(input("请输入秒数"))
-                # action(d, para=second, act=actionType.delay)
                 process.append(([second, actionType.delay]))
             #点击（可能存在）
             case actionType.click_possibly:
                 button = capbutton(d)
                 action(d, button,actionType.click_possibly)
                 process.append([button,actionType.click_possibly])
-            #向上滑动
-            case actionType.swipeup:
-                action(d, para=None,act=actionType.swipeup)
-                process.append([None,actionType.swipeup])
+            #自由滑动
+            case actionType.common_swipe:
+                swipe_range=draw_coordinate(capscreen(d))
+                directions=list(enumerate(swipedirection,start=1))
+                c = input('\n'.join([f'{ind}.{i.value}' for ind,i in directions]+['请选择']))
+                if c not in map(str,range(1,5)):
+                    raise ValueError("输入不合法!")
+                direction=directions[int(c)-1][1]
+
+                action(d, para=(direction,swipe_range),act=actionType.common_swipe)
+                process.append([actionType.common_swipe,(direction,swipe_range,)])
             #划至桌面最右（脚本开始）
             case actionType.begin:
                 action(d, None, actionType.begin)
@@ -214,8 +180,8 @@ def createTask():
                 if c not in map(str,range(1,5)):
                     raise ValueError("输入不合法!")
                 direction=directions[int(c)-1][1]
-                process.append([button,direction])
-                action(d,[button,direction],actionType.swipe_offset)
+                process.append([[direction,button],actionType.swipe_offset])
+                action(d,[direction,button],actionType.swipe_offset)
 
         process.append([random.uniform(2,4),actionType.delay])
 
