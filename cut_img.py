@@ -10,13 +10,17 @@ class cut_img:
         """
         self.scale = scale
         self.img = img_file
-        # self.img =cv2.cvtColor(self.img,cv2.COLOR_BGR2GRAY)
+        if len(self.img.shape)>2:
+            self.img =cv2.cvtColor(self.img,cv2.COLOR_BGR2GRAY)
         self.resized_img = cv2.resize(self.img, dsize=None, fx=scale, fy=scale)
-        self.show_marked_img = False
         self.sub_img = None
+        
+        self.show_marked_img = False
+
         self.notdone=True
-        # 坐标标记
+        # 原图标记
         self.draw_on_ori=draw
+        # 坐标标记
         self.start_x, self.start_y, self.end_x, self.end_y = 0, 0, 0, 0
         # 在缩略图上的坐标标记
         self.ori_x, self.ori_y = 0, 0
@@ -36,14 +40,13 @@ class cut_img:
             self.start_x, self.start_y = round(x / self.scale), round(y / self.scale)
             self.show_marked_img = True
         if event == cv2.EVENT_LBUTTONUP:
-            self.end_x = round(x / self.scale)
-            self.end_y = round(y / self.scale)
+            if x==self.ori_x or y==self.ori_y:
+                return
+            self.end_x,self.end_y = round(x / self.scale),round(y / self.scale)
             self.sub_img = self.img[
                 min(self.start_y, self.end_y) : max(self.start_y, self.end_y),
                 min(self.start_x, self.end_x) : max(self.start_x, self.end_x),
             ]
-            global target_img
-            target_img=self.sub_img
             self.show_marked_img = False
             if self.draw_on_ori:
                 marked=deepcopy(self.resized_img)
@@ -96,7 +99,7 @@ class cut_img:
         cv2.imshow("image", self.resized_img)
         cv2.setMouseCallback("image", self.draw)
         while self.notdone:
-            cv2.waitKey(1)
+            cv2.waitKey(100)
         cv2.destroyAllWindows()
         return (sorted((self.start_y,self.end_y)),sorted((self.start_x,self.end_x)))
 
@@ -111,7 +114,8 @@ def draw_coordinate(img):
 
 if __name__== "__main__":
     img=cv2.cvtColor(np.array(cv2.imread('screen.png')),cv2.COLOR_RGB2GRAY)
-    sx,sy,ex,ed=draw_coordinate(img)
+    print(img.shape)
+    (sx,sy),(ex,ed)=draw_coordinate(img)
     print(sx,sy,ex,ed)
     # cv2.imshow('img',img)
     # cv2.waitKey(0)
