@@ -1,149 +1,22 @@
-import os
-import time
-from cut_img import cut,draw_coordinate
-import random
-from enum import Enum
 from copy import deepcopy
-import pickle
-import cv2
-from adbutils import adb
-import numpy as np
-import dill
-
-adb_device = adb.device()
-
-
-def capscreen(device):
-    return cv2.cvtColor(np.array(device.screenshot()), cv2.COLOR_BGR2GRAY)
-
-
-def capbutton(device=None,img=None):
-    if img is None:
-        img=capscreen(device)
-    sub_img,*_=cut(img)
-    return sub_img
-
-
-def clickbutton(adb_device, img,offset=None,max_retry=3):
-    """img为图像,offset包括了坐标偏移个区域大小"""
-    for _ in range(max_retry):
-        _, maxVal, _, (startX, startY) = cv2.minMaxLoc(
-            cv2.matchTemplate(capscreen(adb_device), img, cv2.TM_CCOEFF_NORMED)
-        )
-        if maxVal > 0.7:
-            break
-        time.sleep(2)
-    if offset is None:
-        endX, endY = startX + img.shape[1], startY + img.shape[0]
-    else:
-        (offset_X,offset_Y),(len_X,len_Y)=offset
-        startX,startY=startX+offset_X,startY+offset_Y
-        endX,endY=startX+len_X,startY+len_Y
-    adb_device.click(random.randint(startX, endX),random.randint(startY, endY))
-
-
-class actionType(Enum):
-    click = '点击'
-    click_offset ='偏移点击'
-    click_possibly ='尝试点击'
-    keyevent = '实体按键'
-    common_swipe = '屏幕滑动'
-    swipe_offset='图片滑动'
-    delay = '延迟'
-    begin = '回到桌面最右'
-
-class swipedirection(Enum):
-    up="上"
-    down="下"
-    right="右"
-    left="左"
-
-
-def swipe(device, direction, img=None,coordinates=False):
-    screen = capscreen(device)
-    shapeY, shapeX = screen.shape[:2]
-    if coordinates:
-        startY,startX=random.randint(*img[0]),random.randint(*img[1])
-    else:
-        _, maxVal, _, (startX,startY,) = cv2.minMaxLoc(
-            cv2.matchTemplate(screen, img, cv2.TM_CCOEFF_NORMED))
-        startX += random.randint(0, img.shape[1])
-        startY += random.randint(0, img.shape[0])
-    match direction:
-        case swipedirection.up:
-            end_X = startX + random.randint(-30, 30)
-            end_Y = max(startY - random.randint(400, 600), 0)
-        case swipedirection.down:
-            end_X = startX + random.randint(-30, 30)
-            end_Y = min(startY + random.randint(400, 600), shapeY)
-        case swipedirection.left:
-            end_X = max(startX - random.randint(400, 600), 0)
-            end_Y = startY + random.randint(-30, 30)
-        case swipedirection.right:
-            end_X = min(startX + random.randint(400, 600), shapeX)
-            end_Y = startY + random.randint(-30, 30)
-    device.swipe(startX, startY, end_X, end_Y, random.uniform(0.2, 0.7))
-
-def perform(device, params, act):
-    match act:
-        case actionType.click:
-            clickbutton(device, params)
-        case actionType.common_swipe:
-            swipe(device,*params,coordinates=True)
-        case actionType.keyevent:
-            device.keyevent(params)
-        case actionType.delay:
-            time.sleep(params)
-        case actionType.begin:
-            device.keyevent("HOME")
-            time.sleep(0.2)
-            device.keyevent("HOME")
-            for _ in range(5):
-                time.sleep(random.uniform(0.8, 1.2))
-                device.swipe(500, 500, 100, 500, 0.1)
-        case actionType.click_possibly:
-            time.sleep(3)
-            clickbutton(device,params)
-        case actionType.click_offset:
-            pat,*offset_shape=params
-            clickbutton(device,pat,offset_shape)
-        case actionType.swipe_offset:
-            swipe(device,*params)
-
-
-def testTask():
-    tasks = [i for i in os.listdir() if os.path.isfile(i) and i.endswith(".task")]
-    if tasks == []:
-        raise FileExistsError("当前目录没有task文件")
-    with open(tasks[int(input("\n".join([f"{ind}.{i}" for ind, i in enumerate(tasks, start=1)]+ ["请输入序号"])))- 1],'rb') as f:
-        task=pickle.load(f)
-    for target, act in task:
-        perform(adb_device, target, act)
-
-def get_enum_value(enum_class, value):
-    return next((member for member in enum_class if member.value == value), None)
-    
-def testdillTask():
-    tasks = [i for i in os.listdir() if os.path.isfile(i) and i.endswith(".dill")]
-    if tasks == []:
-        raise FileExistsError("当前目录没有dill文件")
-    with open(tasks[int(input("\n".join([f"{ind}.{i}" for ind, i in enumerate(tasks, start=1)]+ ["请输入序号"])))- 1],'rb') as f:
-        task=dill.load(f)
-    for target, act,*_ in task:
-        if act==actionType.common_swipe.value or act==actionType.swipe_offset.value:
-            target[0]=get_enum_value(target[0])
-        perform(adb_device, target, get_enum_value(actionType,act))
-
+import os
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QListWidget, QPushButton,QFrame,QLabel,
+    QMainWindow, QListWidget, QPushButton,QFrame,QLabel,
     QVBoxLayout, QWidget, QInputDialog, QMessageBox,QMenu,QHBoxLayout
 )
-from PyQt6.QtCore import Qt,QDateTime,QTimer
-import sys
+from PyQt6.QtCore import Qt,QDateTime,QTimer,QThread, pyqtSignal
 
-class TaskCreatorGUI(QMainWindow):
-    def __init__(self):
+import cv2
+import dill
+
+from cut_img import cut
+from enum_classes import actionType, swipedirection
+from func import capbutton, capscreen, get_enum_value, perform
+
+class TaskManagerGUI(QMainWindow):
+    def __init__(self,device):
         super().__init__()
+        self.adb_divice=device
         self.operate_list = []
         self.tasks_list=[]
         self.timer = QTimer(self)
@@ -198,9 +71,9 @@ class TaskCreatorGUI(QMainWindow):
         self.refresh_button.clicked.connect(self.updateTaskMenu)
 
     
-        # ================= 右侧原有界面 =================
-        right_panel = QWidget()
-        right_layout = QVBoxLayout(right_panel)
+        # ================= 中间界面 =================
+        operater_panel = QWidget()
+        operater_layout = QVBoxLayout(operater_panel)
 
         # 操作列表
         self.operate_list_widget = QListWidget()
@@ -209,27 +82,41 @@ class TaskCreatorGUI(QMainWindow):
         
         # 按钮区域
         self.btn_add = QPushButton("添加操作")
-        self.btn_save = QPushButton("保存任务")
         self.btn_clear = QPushButton("清空列表")
 
         # 布局
-        right_layout.addWidget(self.operate_list_widget)
-        right_layout.addWidget(self.btn_add)
-        right_layout.addWidget(self.btn_save)
-        right_layout.addWidget(self.btn_clear)
+        operater_layout.addWidget(self.operate_list_widget)
+        operater_layout.addWidget(self.btn_add)
+        operater_layout.addWidget(self.btn_clear)
 
         # 绑定事件
         self.btn_add.clicked.connect(self.add_action)
-        self.btn_save.clicked.connect(self.save_task)
         self.btn_clear.clicked.connect(self.clear_list)
 
+        # ================= 编辑控制界面 =================
+        editor_and_test_panel=QWidget()
+        editor_and_test_layout=QVBoxLayout(editor_and_test_panel)
+        editor_and_test_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
+        self.btn_save = QPushButton("保存任务")
+        self.test=QPushButton("测试任务")
+        editor_and_test_layout.addWidget(self.btn_save)
+        editor_and_test_layout.addWidget(self.test)
+        self.btn_save.clicked.connect(self.save_task)
+        self.test.clicked.connect(self.start_test_task)
 
-        # =====将左右面板加入主布局=====
-        main_layout.addWidget(left_panel, stretch=1)   # 左侧占1份空间
-        main_layout.addWidget(right_panel, stretch=3)  # 右侧占3份空间
+        # =====将面板加入主布局=====
+        main_layout.addWidget(left_panel, stretch=1)
+        main_layout.addWidget(operater_panel, stretch=2)
+        main_layout.addWidget(editor_and_test_panel,stretch=1)
         
         self.setCentralWidget(main_widget)
+
+    def start_test_task(self):
+        self.test_thread = TestTaskThread(self.operate_list, self.adb_divice,self)
+        self.test_thread.start()
+    def set_operate_index(self, index:int):
+        self.operate_list_widget.setCurrentRow(index)
 
     def update_time(self):
         """更新时间显示"""
@@ -296,18 +183,18 @@ class TaskCreatorGUI(QMainWindow):
                 case actionType.keyevent:
                     key,ok=QInputDialog.getItem(self,"选择按键","选择按键",["HOME","BACK"],editable=False)
                     if ok :
-                        perform(adb_device, key, operate)
+                        perform(self.adb_divice, key, operate)
                         self.operate_list.append([key, operate.value,f"实体键{key}"])
                         self.operate_list_widget.addItem(f"实体键{key}")
                 # 单击
                 case actionType.click:
-                    button = capbutton(device=adb_device)
-                    perform(adb_device, button, operate)
+                    button = capbutton(device=self.adb_divice)
+                    perform(self.adb_divice, button, operate)
                     self.operate_list.append([deepcopy(button), operate.value,"点击图像"])
                     self.operate_list_widget.addItem("点击图像")
                 #偏移点击
                 case actionType.click_offset:
-                    screen=capscreen(device=adb_device)
+                    screen=capscreen(device=self.adb_divice)
                     button_basic = capbutton(img=screen)
                     button_target = capbutton(img=screen)
                     
@@ -315,7 +202,7 @@ class TaskCreatorGUI(QMainWindow):
                     _, _, _, (startX_t, startY_t) = cv2.minMaxLoc(cv2.matchTemplate(screen, button_target, cv2.TM_CCOEFF_NORMED))
                     
                     self.operate_list.append([[button_basic,(startX_t-startX_b,startY_t-startY_b),button_target.shape],operate.value,"偏移点击"])
-                    perform(adb_device,[button_basic,(startX_t-startX_b,startY_t-startY_b),button_target.shape],operate)
+                    perform(self.adb_divice,[button_basic,(startX_t-startX_b,startY_t-startY_b),button_target.shape],operate)
                     self.operate_list_widget.addItem("偏移点击")
                 #延迟
                 case actionType.delay:
@@ -325,33 +212,33 @@ class TaskCreatorGUI(QMainWindow):
                         self.operate_list_widget.addItem(f"延迟{second}秒")
                 #点击（可能存在）
                 case actionType.click_possibly:
-                    button = capbutton(adb_device)
-                    perform(adb_device, button,operate)
+                    button = capbutton(self.adb_divice)
+                    perform(self.adb_divice, button,operate)
                     self.operate_list.append([button,operate.value,"尝试点击可能存在的图像"])
                     self.operate_list_widget.addItem(f"尝试点击可能存在的图像")
                 #自由滑动
                 case actionType.common_swipe:
-                    _,_,*swipe_range=cut(capscreen(adb_device),return_start_pos=True,return_end_pos=True)
+                    _,_,*swipe_range=cut(capscreen(self.adb_divice),return_start_pos=True,return_end_pos=True)
                     transpose=lambda x:list(map(list,zip(*x)))
                     swipe_range=transpose(swipe_range)
                     direction_str,ok= QInputDialog.getItem(self,"选择方向","选择方向",[i.value for i in self.directions],editable=False)
                     if ok:
                         direction=get_enum_value(swipedirection,direction_str)
-                        perform(adb_device, params=(direction,swipe_range),act=operate)
-                        self.operate_list.append([operate.value,direction_str,swipe_range,f"滑动屏幕区域，方向{direction_str} ;区域 X from {swipe_range[1][0]} to {swipe_range[1][1]},Y from {swipe_range[0][0]} to {swipe_range[0][1]}"])
+                        perform(self.adb_divice, params=(direction,swipe_range),act=operate)
+                        self.operate_list.append([[direction_str,swipe_range],operate.value,f"滑动屏幕区域，方向{direction_str} ;区域 X from {swipe_range[1][0]} to {swipe_range[1][1]},Y from {swipe_range[0][0]} to {swipe_range[0][1]}"])
                         self.operate_list_widget.addItem(f"滑动屏幕区域，方向{direction_str} ;区域 X from {swipe_range[1][0]} to {swipe_range[1][1]},Y from {swipe_range[0][0]} to {swipe_range[0][1]}")
 
                 case actionType.begin:
-                    perform(adb_device, None, operate)
+                    perform(self.adb_divice, None, operate)
                     self.operate_list.append([None, operate.value,"回到桌面最右"])
                     self.operate_list_widget.addItem("回到桌面最右")
 
                 case actionType.swipe_offset:
-                    img=capscreen(adb_device)
+                    img=capscreen(self.adb_divice)
                     button=capbutton(img=img)
                     direction_str,ok= QInputDialog.getItem(self,"选择方向","选择方向",[d.value for d in self.directions],editable=False)
                     direction=get_enum_value(swipedirection,direction_str)
-                    perform(adb_device,[direction,button],operate)
+                    perform(self.adb_divice,[direction,button],operate)
 
                     self.operate_list.append([[direction_str,button],operate.value,f"滑动图像,方向{direction.value}"])
                     self.operate_list_widget.addItem(f"滑动图像,方向{direction.value}")
@@ -373,12 +260,17 @@ class TaskCreatorGUI(QMainWindow):
         self.operate_list.clear()
         self.operate_list_widget.clear()
 
+class TestTaskThread(QThread):
+    def __init__(self, operate_list, adb_device,manager=None):
+        super().__init__()
+        self.operate_list = operate_list
+        self.adb_device = adb_device
+        self.manager =manager
 
-def TaskCreator():
-    app = QApplication(sys.argv)
-    window = TaskCreatorGUI()
-    window.show()
-    sys.exit(app.exec())
-
-if __name__=="__main__":
-    TaskCreator()
+    def run(self):
+        for index, (target, act, *_) in enumerate(self.operate_list):
+            if act == actionType.common_swipe.value or act == actionType.swipe_offset.value:
+                target[0] = get_enum_value(swipedirection, target[0])
+            perform(self.adb_device, target, get_enum_value(actionType, act))
+            if self.manager:
+                self.manager.set_operate_index(index)
